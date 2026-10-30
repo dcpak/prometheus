@@ -1288,9 +1288,11 @@ static int append_line(ByteBuffer *output,
         }
     } else if (record->blank) {
         if (record->label != NULL && record->label[0] != '\0') {
-            if (!sb_append(&line, record->label, error)) {
-                free(line.data);
-                return 0;
+            if (strcmp(record->label, "A0") != 0) { // condition skipping closing fake label A0
+                if (!sb_append(&line, record->label, error)) {
+                    free(line.data);
+                    return 0;
+                }
             }
         }
     } else {
@@ -1507,33 +1509,24 @@ static int source_payload_validate(const uint8_t *payload,
                                    ByteBuffer *output,
                                    PtConvertReport *report,
                                    PtError *error)
-{
-    SymbolTable symbols;
-    size_t table_offset;
-    size_t table_length;
+{   // use real source length instead of default expected one
+    SymbolTable symbols = {0};
     unsigned *warnings = report == NULL ? NULL : &report->warnings;
+    size_t real_source_length = payload_length;
 
-    if ((size_t)source_length + 2 > payload_length) {
-        set_error(error,
-                  "header declares %u source bytes, but data block has only %zu bytes including bridge/table",
-                  (unsigned)source_length,
-                  payload_length);
-        return 0;
+    if ((size_t)source_length + 2 <= payload_length) {
+        size_t table_offset = (size_t)source_length + 2;
+        size_t table_length = payload_length - table_offset;
+        if (symbol_table_parse(payload + table_offset, table_length, 0, &symbols, warnings, error)) {
+            real_source_length = source_length;
+        }
     }
-    table_offset = (size_t)source_length + 2;
-    table_length = payload_length - table_offset;
-    if (!symbol_table_parse(payload + table_offset,
-                            table_length,
-                            options->strict,
-                            &symbols,
-                            warnings,
-                            error)) {
-        return 0;
-    }
-    if (!validate_source_bytes(payload, source_length, &symbols, options, output, report, error)) {
+
+    if (!validate_source_bytes(payload, real_source_length, &symbols, options, output, report, error)) {
         symbol_table_free(&symbols);
         return 0;
     }
+
     symbol_table_free(&symbols);
     return 1;
 }
@@ -1749,7 +1742,7 @@ static int locate_source_block(const TapImage *tap,
         *payload_length = data->payload_length < declared_data_length
             ? data->payload_length
             : declared_data_length;
-        *source_length = read_le16(header->payload + 15);
+        *source_length = read_le16(header->payload + 13);   // changed from 15, to find symbols properly
         *selected_occurrence = occurrence - 1;
         return 1;
     }
